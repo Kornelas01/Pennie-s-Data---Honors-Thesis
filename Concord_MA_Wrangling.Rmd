@@ -1,0 +1,270 @@
+---
+title: "Concord_MA_Use"
+output: pdf_document
+date: "2024-02-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load tidyverse
+```{r}
+library(tidyverse)
+```
+
+read csv file 
+```{r}
+Concord_data <- read.csv("Observations_of_flowering_phenology_in_Concord__Massachusetts__USA__1963-1993_.csv")
+```
+
+Pivot data from wide to long format 
+```{r}
+Concord_long <- Concord_data %>% 
+  pivot_longer(
+    cols = X1963s:X1993e,
+    names_to = "year",
+    values_to = "date")
+```
+
+lets try to remove the X from the beginning of our year
+```{r}
+Concord_long$year <-  
+  str_remove(
+    Concord_long$year, "X")
+```
+
+Seperate Pheno phase by start and end 
+```{r}
+Concord_long <- Concord_long %>%
+  mutate(
+    Pheno = 
+      str_extract(year,"[a-z]+") )
+```
+
+Remove "s" and "e" from year
+```{r}
+Concord_long$year <-  
+  str_remove(
+    Concord_long$year, "[es]")
+```
+
+Extract the day from date column 
+```{r}
+Concord_long <- Concord_long %>%
+  mutate(day  =
+  str_extract(date, "\\-*\\d+\\.*\\d*")
+)
+```
+
+Remove day  from date column to just leave year
+```{r}
+Concord_long$date <- 
+      str_sub(Concord_long$date, 3)
+```
+
+Remove - from date then make dates into numbers not text
+```{r}
+Concord_long$date <- Concord_long$date %>% 
+      str_replace_all("-","")
+
+Concord_long <- Concord_long %>%
+  rename(month = date)
+
+month_mapping <- c(jan = "01", feb = "02", mar = "03", apr = "04", may = "05", jun = "06",
+                   jul = "07", aug = "08", sep = "09", oct = "10", nov = "11", dec = "12")
+
+Concord_long <- Concord_long %>%
+  mutate(month = ifelse(!is.na(month), month_mapping, NA))
+```
+
+Create new date column using YMD format
+```{r}
+Concord_long <- Concord_long %>% 
+  mutate(Observation_date = make_date(year = year, month = month, day = day))
+```
+
+Erase month, day, year column
+```{r}
+Concord_long <- Concord_long [-c(4,5,7)]
+```
+
+Add kingdom column
+```{r}
+Concord_long <- Concord_long %>% 
+    mutate( Kingdom = "Plantae")
+
+Concord_long <-  Concord_long %>% relocate(Kingdom)
+```
+
+Remove any rows that have NA in observation date column 
+```{r}
+Concord_long <- 
+  Concord_long %>% 
+    drop_na()
+```
+
+Replace S and E with Start and End
+```{r}
+Concord_long$Pheno <-  
+  str_replace(Concord_long$Pheno, "s", "Start")
+
+Concord_long$Pheno <-  
+  str_replace(Concord_long$Pheno, "e", "End")
+```
+
+Add complete scientific name 
+```{r}
+Concord_long <- Concord_long %>%
+  mutate(Scientific_name = paste(Concord_long$Genus, Concord_long$Species))
+```
+
+add column for lat and long
+```{r}
+Concord_long <- Concord_long %>%
+  mutate(Longitude = "-71.3691069")
+
+Concord_long <- Concord_long %>%
+  mutate(Latitude = "42.4403334")
+```
+
+attach tsn number - first create a test df that can be joined to concord long df. Test df will only include uniqe species name 
+```{r}
+install.packages("taxize")
+library(taxize)
+
+Concord_long$Scientific_name <- paste(Concord_long$Genus,Concord_long$Species)
+
+test_df <- distinct(Concord_long,Scientific_name)
+
+test_df <- test_df %>% 
+  mutate(
+    Scientific_name=
+      str_squish(Scientific_name))
+
+test_df <- test_df %>%
+  mutate(TSN = get_tsn(test_df$Scientific_name, rows = 1))
+
+```
+
+Create new df that only has species where TSN = NA - prob dont need this
+```{r}
+NA_TSN <- test_df[is.na(test_df$TSN),]
+```
+
+Use fuzzymatch from worldflora to get the correct name for NA TSN in test_df -> will compare TSN from test_df and worldflora to make sure no one is different 
+```{r}
+install.packages("WorldFlora")
+library(WorldFlora)
+
+install.packages("fuzzyjoin")
+library(fuzzyjoin)
+
+WFO.download()
+
+WFO.remember("classification.csv")
+
+fuzzy_match <- WFO.match.fuzzyjoin(spec.data = NA_TSN$Scientific_name, WFO.data = WFO.data, fuzzydist.max = 2)
+
+# have WFO condense the above dataframe down to one clear match per species
+one_to_one <- WFO.one(fuzzy_match)
+
+# save the output so we don't have to run those again because they take up wild amounts of RAM!
+write_csv(one_to_one, "corrected_taxonomy.csv")
+
+# run the updated names through `taxize` to get updates TSN
+one_to_one_TSN <- one_to_one %>% 
+  mutate(TSN = get_tsn(one_to_one$scientificName, rows = 1))
+
+# add tsn to Silene pennsylvanica
+
+one_to_one_TSN <- one_to_one_TSN %>% 
+  mutate( 
+    TSN = ifelse(spec.name == "Silene pennsylvanica", "20057", TSN)) 
+
+```
+
+Rename the spec.name column in one to one TSN to match test_df
+```{r}
+colnames(one_to_one_TSN)[colnames(one_to_one_TSN) == 'spec.name'] <- 'Scientific_name'
+
+```
+
+Change TSN from chr to numeric
+Rejoin one to one TSN  and test_df 
+```{r}
+test_df <- test_df %>% 
+  mutate(TSN = as.numeric(test_df$TSN)) 
+
+one_to_one_TSN <- one_to_one_TSN %>% 
+  mutate(TSN = as.numeric(one_to_one_TSN$TSN)) 
+
+one_to_one_TSN <-  one_to_one_TSN %>% relocate(TSN, .after = Scientific_name)
+
+for (i in 1:nrow(test_df)){
+  if (is.na(test_df$TSN[i])){
+    index <- which(one_to_one_TSN$Scientific_name == test_df$Scientific_name [i])
+    test_df$TSN[i] <-  one_to_one_TSN$TSN[index]
+  }else {
+    test_df$TSN [i] == test_df$TSN [i]
+  }
+}
+  
+
+
+i=11
+```
+
+Fix all misspelled names in Concord_Long -- do we fix species and genus 
+```{r}
+Concord_corrected_name <- read.csv("corrected_taxonomy.csv")
+
+misspelled <- Concord_corrected_name$spec.name
+
+for (i in 1:nrow(Concord_long)) {
+  if (str_trim(Concord_long$Scientific_name[i]) %in% misspelled){
+    index <- which(Concord_corrected_name$spec.name.ORIG == str_trim(Concord_long$Scientific_name[i]))
+    Concord_long$Scientific_name[i] <- Concord_corrected_name$scientificName[index]
+  } else {
+    Concord_long$Scientific_name[i] <- Concord_long$Scientific_name [i]
+  }
+}
+
+```
+
+Create a TSN column in Concord_Long
+```{r}
+Concord_long <- Concord_long %>% 
+  mutate(TSN = NA)
+```
+ 
+ For loop to match up TSN
+```{r}
+for (i in 1:nrow(Concord_long)){
+  if (!is.na(Concord_long$TSN[i])){
+Concord_long$TSN [i] == Concord_long$TSN [i]    
+  }else {
+    index <- which(test_df$Scientific_name == Concord_long$Scientific_name [i])
+    Concord_long$TSN[i] <-  test_df$TSN[index]
+  }
+}
+
+i=24
+```
+
+Final step
+```{r}
+Clean_Concord_Data <- full_join(Concord_long,test_df)
+
+for (i in 1:nrow(Clean_Concord_Data)){
+  if (is.na(Clean_Concord_Data$TSN[i])){
+    index <- which(test_df$Scientific_name == Clean_Concord_Data$Scientific_name [i])
+    Clean_Concord_Data$TSN[i] <-  test_df$TSN[index]
+  }else {
+    Clean_Concord_Data$TSN [i] == Clean_Concord_Data$TSN [i]
+  }
+}
+```
+
+``````
+
