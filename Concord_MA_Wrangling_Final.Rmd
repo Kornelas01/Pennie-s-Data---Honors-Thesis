@@ -52,30 +52,25 @@ Concord_long$year <-
 Extract the day from date column 
 ```{r}
 Concord_long <- Concord_long %>%
-  mutate(day  =
-  str_extract(date, "\\-*\\d+\\.*\\d*")
-)
-```
-
-Remove day  from date column to just leave year
-```{r}
-Concord_long$date <- 
-      str_sub(Concord_long$date, 3)
+  separate(col = date, into = c("day", "month")) 
+  
 ```
 
 Remove - from date then make dates into numbers not text
 ```{r}
-Concord_long$date <- Concord_long$date %>% 
-      str_replace_all("-","")
 
 Concord_long <- Concord_long %>%
-  rename(month = date)
-
-month_mapping <- c(jan = "01", feb = "02", mar = "03", apr = "04", may = "05", jun = "06",
-                   jul = "07", aug = "08", sep = "09", oct = "10", nov = "11", dec = "12")
-
-Concord_long <- Concord_long %>%
-  mutate(month = ifelse(!is.na(month), month_mapping, NA))
+  mutate(month = case_when(month == "Apr" ~ 4, 
+                           month == "May" ~ 5,
+                           month == "Jun" ~ 6,
+                           month == "Jul" ~ 7,
+                           month == "Aug" ~ 8,
+                           month == "Sep" ~ 9,
+                           month == "Oct" ~ 10,
+                           month == "Nov" ~ 11,
+                           TRUE ~ NA)) %>% 
+  mutate(year = as.numeric(year),
+         day = as.numeric((day)))
 ```
 
 Create new date column using YMD format
